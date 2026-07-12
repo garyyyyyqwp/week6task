@@ -112,6 +112,9 @@ class ReportGenerateRequest(BaseModel):
 class ReportGenerateResponse(BaseModel):
     """Response metadata for a generated report (for export reference)."""
     report_id: str = Field(default="", description="报告唯一 ID，用于导出端点")
+
+
+class ReportRefineRequest(BaseModel):
     """Request to refine a selected text passage."""
     selected_text: str = Field(..., min_length=1, max_length=5000, description="用户选中的文字")
     context_before: str = Field(default="", max_length=2000, description="选区前文")
