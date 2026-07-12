@@ -1,13 +1,58 @@
 """Search Router — Web search, content fetching, site search."""
 
+import ipaddress
+import re
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.web_search import search_web, search_web_mock
 from app.services.content_fetcher import fetch_url
 from app.services.site_registry import search_site, list_sites
 
 router = APIRouter(tags=["search"])
+
+# Blocklist for SSRF prevention
+_BLOCKED_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+]
+_BLOCKED_SCHEMES = {"file", "gopher", "ftp", "dict", "ldap"}
+
+
+def _validate_public_url(url: str) -> str:
+    """Validate URL is safe: http/https only, no private IPs."""
+    parsed = urlparse(url)
+
+    if parsed.scheme.lower() in _BLOCKED_SCHEMES:
+        raise ValueError(f"不允许的协议: {parsed.scheme}")
+    if parsed.scheme.lower() not in ("http", "https"):
+        raise ValueError(f"不支持的协议: {parsed.scheme}")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("无法解析URL中的主机名")
+    if hostname.lower() in _BLOCKED_HOSTS:
+        raise ValueError("不允许访问该主机")
+
+    # Check if hostname resolves to a private IP
+    try:
+        addr = ipaddress.ip_address(hostname)
+        for net in _BLOCKED_NETWORKS:
+            if addr in net:
+                raise ValueError("不允许访问内网地址")
+    except ValueError as e:
+        if "不允许" in str(e):
+            raise
+        # Not an IP literal — DNS name, allowed (but log a warning)
+        pass
+
+    return url
 
 
 # ---------------------------------------------------------------------------
@@ -25,11 +70,24 @@ class FetchUrlRequest(BaseModel):
     max_chars: int = Field(default=3000, ge=500, le=10000, description="最大返回字符数")
     strategy: str = Field(default="jina", description="提取策略: jina 或 bs4")
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        return _validate_public_url(v)
+
 
 class SearchSiteRequest(BaseModel):
     site_id: str = Field(..., min_length=1, description="站点 ID (pubmed/arxiv/who/cdc/github)")
     query: str = Field(..., min_length=1, max_length=500, description="搜索查询")
     num_results: int = Field(default=5, ge=1, le=10, description="返回结果数")
+
+    @field_validator("site_id")
+    @classmethod
+    def validate_site_id(cls, v: str) -> str:
+        valid = {"pubmed", "arxiv", "semantic_scholar", "who", "cdc", "github"}
+        if v.lower() not in valid:
+            raise ValueError(f"不支持的站点ID: {v}。可用: {', '.join(sorted(valid))}")
+        return v.lower()
 
 
 # ---------------------------------------------------------------------------

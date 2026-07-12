@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse, Response
@@ -21,6 +22,7 @@ router = APIRouter(tags=["report"])
 
 # In-memory report store (in production, use DB)
 _reports: dict[str, dict] = {}
+_MAX_REPORTS = 50  # Prevent memory exhaustion
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +44,8 @@ async def generate_report(request: ReportGenerateRequest):
         report_complete: Full report JSON + Markdown
         done: Generation complete
     """
+    report_id = uuid.uuid4().hex[:12]
+
     async def event_generator():
         async for event in generate_report_stream(
             topic=request.topic,
@@ -49,6 +53,20 @@ async def generate_report(request: ReportGenerateRequest):
             include_references=request.include_references,
             language=request.language,
         ):
+            # Capture report data from the SSE stream for later export
+            if event.get("event") == "report_complete":
+                try:
+                    data = json.loads(event["data"])
+                    _reports[report_id] = data
+                    # Include report_id in the event so frontend can use it
+                    data["report_id"] = report_id
+                    event["data"] = json.dumps(data, ensure_ascii=False)
+                    # Prune old reports if over limit
+                    while len(_reports) > _MAX_REPORTS:
+                        oldest = next(iter(_reports))
+                        del _reports[oldest]
+                except Exception:
+                    pass
             yield event
 
     return EventSourceResponse(event_generator())
@@ -116,8 +134,8 @@ async def refine_text(request: ReportRefineRequest):
         )
 
     except Exception as e:
-        logger.error("Refine error: %s", e)
-        raise HTTPException(status_code=502, detail=f"润色服务暂时不可用: {str(e)}")
+        logger.error("Refine error: %s", e, exc_info=True)
+        raise HTTPException(status_code=502, detail="润色服务暂时不可用，请稍后重试")
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +192,10 @@ async def export_report(
                 },
             )
         except Exception as e:
-            logger.error("PDF export error: %s", e)
+            logger.error("PDF export error: %s", e, exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail=f"PDF导出失败: {str(e)}。请尝试 Markdown 格式导出。"
+                detail="PDF导出失败，请尝试 Markdown 格式导出。"
             )
 
     else:
@@ -189,7 +207,10 @@ async def export_report(
 
 def _md_to_html(md_content: str, title: str = "Research Report") -> str:
     """Convert Markdown to styled HTML for PDF rendering."""
+    import html as _html
     import markdown
+
+    safe_title = _html.escape(title)
 
     html_body = markdown.markdown(
         md_content,
@@ -200,13 +221,13 @@ def _md_to_html(md_content: str, title: str = "Research Report") -> str:
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>{title}</title>
+<title>{safe_title}</title>
 <style>
   @page {{
     size: A4;
     margin: 2cm;
     @top-center {{
-      content: "{title}";
+      content: "{safe_title}";
       font-size: 10pt;
       color: #666;
     }}

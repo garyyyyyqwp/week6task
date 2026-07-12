@@ -10,14 +10,24 @@
   GET  /api/v1/report/{id}/export — 文档导出
 """
 
+import logging
 import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.routers import search, agent, report
+from app.utils.config import OPENAI_API_KEY
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="研报平台技术预研",
@@ -31,6 +41,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    """Add X-Request-ID header and log each request."""
+    import uuid
+    request_id = uuid.uuid4().hex[:12]
+    logger.info("[%s] %s %s", request_id, request.method, request.url.path)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 app.include_router(search.router, prefix="/api/v1/search")
 app.include_router(agent.router, prefix="/api/v1/agent")
@@ -47,4 +68,34 @@ async def root():
 
 @app.get("/health")
 async def health():
+    """Basic health check."""
     return {"status": "ok"}
+
+
+@app.get("/health/deep")
+async def health_deep():
+    """Deep health check — verifies connectivity to external services."""
+    import time as _time
+    checks = {}
+
+    # Check configs loaded
+    checks["config"] = bool(OPENAI_API_KEY)
+
+    # Quick connectivity check (no actual API call — just DNS resolution)
+    import socket
+    try:
+        t0 = _time.monotonic()
+        socket.getaddrinfo("open.bigmodel.cn", 443, proto=socket.IPPROTO_TCP)
+        checks["llm_connectivity"] = {
+            "status": "ok",
+            "latency_ms": round((_time.monotonic() - t0) * 1000),
+        }
+    except Exception as e:
+        checks["llm_connectivity"] = {"status": "error", "detail": str(e)}
+
+    healthy = all(
+        v if isinstance(v, bool) else v.get("status") != "error"
+        for v in checks.values()
+    )
+
+    return {"status": "ok" if healthy else "degraded", "checks": checks}

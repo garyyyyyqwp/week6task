@@ -3,9 +3,11 @@ services:
     name: week6task
     runtime: python
     region: singapore  # 新加坡节点，国内访问延迟较低
-    plan: free
-    buildCommand: pip install -r requirements.txt
+    plan: starter  # free plan deprecated, use starter
+    buildCommand: |
+      apt-get update && apt-get install -y python3-cffi python3-brotli libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info && pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
     envVars:
       - key: OPENAI_API_KEY
         sync: false  # 在 Render Dashboard 手动设置
@@ -17,3 +19,5 @@ services:
         sync: false  # 在 Render Dashboard 手动设置
       - key: AGENT_MAX_STEPS
         value: "10"
+      - key: PYTHONUNBUFFERED
+        value: "1"

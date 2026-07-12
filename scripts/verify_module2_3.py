@@ -176,7 +176,7 @@ async def test_agent_engine_internals():
     citation registration) without needing an HTTP server.
     """
     from app.services.agent_tools import (
-        execute_tool, set_citation_manager, TOOL_DEFINITIONS,
+        execute_tool, TOOL_DEFINITIONS,
     )
     from app.services.citation_manager import CitationManager
 
@@ -186,7 +186,6 @@ async def test_agent_engine_internals():
 
     # Setup citation manager (simulating agent engine init)
     cm = CitationManager()
-    set_citation_manager(cm)
 
     # Verify tool definitions
     tool_names = [t["function"]["name"] for t in TOOL_DEFINITIONS]
@@ -229,6 +228,7 @@ async def test_agent_engine_internals():
     pubmed_result = await execute_tool(
         "search_site",
         {"site_id": "pubmed", "query": "long COVID", "num_results": 3},
+        citation_manager=cm,
     )
 
     # Check citations were registered

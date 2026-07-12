@@ -1,7 +1,7 @@
 """Agent Tools — Week 6 版本，含真实搜索 + 站点抓取 + 引用注册。
 
 Tools are defined in OpenAI Function Calling format.
-Each tool executor accepts a CitationManager and registers sources.
+Each tool executor accepts an optional CitationManager and registers sources.
 """
 
 import json
@@ -14,15 +14,6 @@ from app.services.content_fetcher import fetch_url
 from app.services.site_registry import search_site, list_sites
 
 logger = logging.getLogger(__name__)
-
-# CitationManager reference — set by the agent engine before each run
-_citation_manager: Any = None
-
-
-def set_citation_manager(cm):
-    """Set the citation manager for the current agent run. Called by agent engine."""
-    global _citation_manager
-    _citation_manager = cm
 
 
 # ---------------------------------------------------------------------------
@@ -148,15 +139,15 @@ TOOL_DEFINITIONS: list[dict] = [
 # Tool Executors
 # ---------------------------------------------------------------------------
 
-async def execute_search_web(query: str, num_results: int = 5) -> str:
+async def execute_search_web(query: str, num_results: int = 5, citation_manager=None) -> str:
     """Search the web and register citations."""
     results = await search_web(query, num_results=num_results)
 
     # Register citations
-    if _citation_manager:
+    if citation_manager:
         for r in results:
             if r.get("url"):
-                _citation_manager.add(
+                citation_manager.add(
                     url=r["url"],
                     title=r["title"],
                     snippet=r["snippet"],
@@ -178,22 +169,22 @@ async def execute_search_web(query: str, num_results: int = 5) -> str:
             parts[-1] += f"    日期: {r['published_date']}\n"
 
     # Include citation reference
-    if _citation_manager:
-        parts.append(f"\n📌 以上来源已注册为引用，编号 [{_citation_manager.count - len(results) + 1}]-[{_citation_manager.count}]")
+    if citation_manager:
+        parts.append(f"\n📌 以上来源已注册为引用，编号 [{citation_manager.count - len(results) + 1}]-[{citation_manager.count}]")
 
     return "\n".join(parts)
 
 
-async def execute_fetch_url(url: str, max_chars: int = 3000) -> str:
+async def execute_fetch_url(url: str, max_chars: int = 3000, citation_manager=None) -> str:
     """Fetch and extract article content, register citation."""
     result = await fetch_url(url, max_chars=max_chars)
 
     # Register citation
-    if _citation_manager and not result.get("error"):
+    if citation_manager and not result.get("error"):
         # Extract title from content (first line of Jina output)
         content_preview = result.get("content", "")
         title = content_preview.split("\n")[0].strip("# ").strip() or url
-        _citation_manager.add(
+        citation_manager.add(
             url=url,
             title=title[:200],
             snippet=content_preview[:300],
@@ -216,15 +207,16 @@ async def execute_search_site(
     site_id: str,
     query: str,
     num_results: int = 5,
+    citation_manager=None,
 ) -> str:
     """Search a specific site and register citations."""
     result = await search_site(site_id=site_id, query=query, num_results=num_results)
 
     # Register citations
-    if _citation_manager:
+    if citation_manager:
         for r in result.get("results", []):
             if r.get("url"):
-                _citation_manager.add(
+                citation_manager.add(
                     url=r["url"],
                     title=r["title"],
                     snippet=r.get("snippet", ""),
@@ -249,9 +241,9 @@ async def execute_search_site(
             f"    摘要: {r['snippet'][:300]}\n"
         )
 
-    if _citation_manager:
+    if citation_manager:
         n = len(result.get("results", []))
-        parts.append(f"\n📌 以上来源已注册为引用，编号 [{_citation_manager.count - n + 1}]-[{_citation_manager.count}]")
+        parts.append(f"\n📌 以上来源已注册为引用，编号 [{citation_manager.count - n + 1}]-[{citation_manager.count}]")
 
     return "\n".join(parts)
 
@@ -311,16 +303,17 @@ _TOOLS: dict[str, Any] = {
 }
 
 
-async def execute_tool(tool_name: str, tool_args: dict[str, Any]) -> str:
-    """Execute a tool by name."""
+async def execute_tool(tool_name: str, tool_args: dict[str, Any], citation_manager=None) -> str:
+    """Execute a tool by name. Passes citation_manager for source tracking."""
     executor = _TOOLS.get(tool_name)
     if executor is None:
         return f"错误：未知工具 '{tool_name}'。可用工具: {', '.join(_TOOLS)}"
 
     try:
+        return str(await executor(**tool_args, citation_manager=citation_manager))
+    except TypeError:
+        # Some tools (calculator, get_current_time) don't accept citation_manager
         return str(await executor(**tool_args))
-    except TypeError as e:
-        return f"工具参数错误 ({tool_name}): {e}"
     except Exception as e:
         logger.error("Tool error (%s): %s", tool_name, e)
         return f"工具执行错误 ({tool_name}): {e}"

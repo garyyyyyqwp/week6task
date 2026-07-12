@@ -8,6 +8,7 @@ Supports two fetch strategies per site:
   - "jina": Use Jina Reader to extract results from the site's search page.
 """
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -105,13 +106,13 @@ SITE_REGISTRY: dict[str, SiteConfig] = {
 _last_request: dict[str, float] = {}
 
 
-def _enforce_rate_limit(site_id: str, config: SiteConfig):
-    """Sleep if needed to respect per-site rate limits."""
+async def _enforce_rate_limit(site_id: str, config: SiteConfig):
+    """Sleep if needed to respect per-site rate limits (non-blocking)."""
     now = time.monotonic()
     last = _last_request.get(site_id, 0)
     elapsed = now - last
     if elapsed < config.rate_limit:
-        time.sleep(config.rate_limit - elapsed)
+        await asyncio.sleep(config.rate_limit - elapsed)
     _last_request[site_id] = time.monotonic()
 
 
@@ -151,7 +152,7 @@ async def search_site(
             "error": f"未注册的站点 '{site_id}'。可用站点: {available}",
         }
 
-    _enforce_rate_limit(site_id, config)
+    await _enforce_rate_limit(site_id, config)
 
     try:
         if config.fetch_strategy == "api":

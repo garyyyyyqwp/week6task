@@ -210,7 +210,9 @@ async function generateReport() {
           try {
             const data = JSON.parse(line.slice(5).trim());
             handleSSEEvent(currentEvent, data, sectionContents);
-          } catch(e) {}
+          } catch(e) {
+            console.warn('SSE parse error:', e, 'line:', line.slice(0, 100));
+          }
           currentEvent = '';
         }
       }

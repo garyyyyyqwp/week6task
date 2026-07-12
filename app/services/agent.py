@@ -26,7 +26,6 @@ from app.services.llm import get_client, get_model
 from app.services.agent_tools import (
     TOOL_DEFINITIONS,
     execute_tool,
-    set_citation_manager,
 )
 from app.services.citation_manager import CitationManager
 from app.utils.config import AGENT_MAX_STEPS
@@ -81,7 +80,6 @@ async def run_agent_stream(
 
     # Initialize citation tracking for this run
     cm = CitationManager()
-    set_citation_manager(cm)
 
     messages: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -246,7 +244,7 @@ async def run_agent_stream(
             async def _exec(fn_name, fn_args, is_dup, url=""):
                 if is_dup:
                     return f"[跳过重复抓取] URL '{url}' 已在之前获取过，跳过以减少 API 调用。"
-                return await execute_tool(fn_name, fn_args)
+                return await execute_tool(fn_name, fn_args, citation_manager=cm)
 
             parallel_start = time.monotonic()
 
